@@ -198,7 +198,7 @@ def unpackb(object packed, object object_hook=None, object list_hook=None, bint 
     Unpack packed_bytes to object. Returns an unpacked object."""
     cdef template_context ctx
     cdef size_t off = 0
-    cdef int ret
+    cdef int ret = 0
 
     cdef char* buf
     cdef Py_ssize_t buf_len
@@ -425,3 +425,87 @@ cdef class Unpacker(object):
 
     #def _off(self):
     #    return self.buf_head
+
+
+cdef class SimpleUnpacker(object):
+    """
+    Non-Streaming unpacker.
+
+    If `use_list` is true, msgpack list is deserialized to Python list.
+    Otherwise, it is deserialized to Python tuple. (default: False)
+
+    `object_hook` is same to simplejson. If it is not None, it should be callable
+    and Unpacker calls it when deserializing key-value.
+
+    `encoding` is encoding used for decoding msgpack bytes. If it is None (default),
+    msgpack bytes is deserialized to Python bytes.
+
+    `unicode_errors` is used for decoding bytes.
+
+    example::
+
+        unpacker = SimpleUnpacker()
+        buf = astream.read()
+        o = unpacker.unpack(buf)
+        do_something(o)
+    """
+    cdef template_context ctx
+    cdef object _bencoding
+    cdef object _berrors
+
+    def __cinit__(self):
+        pass
+
+    def __dealloc__(self):
+        pass
+
+    def __init__(self, object object_hook=None, object list_hook=None,
+                 bint use_list=0, encoding=None, unicode_errors='strict'):
+
+        template_init(&self.ctx)
+        if encoding is None:
+            self.ctx.user.encoding = NULL
+            self.ctx.user.unicode_errors = NULL
+        else:
+            if isinstance(encoding, unicode):
+                self._bencoding = encoding.encode('ascii')
+            else:
+                self._bencoding = encoding
+            if isinstance(unicode_errors, unicode):
+                self._berrors = unicode_errors.encode('ascii')
+            else:
+                self._berrors = unicode_errors
+            self.ctx.user.encoding = PyBytes_AsString(self._bencoding)
+            self.ctx.user.unicode_errors = PyBytes_AsString(self._berrors)
+
+        self.ctx.user.use_list = use_list
+        self.ctx.user.object_hook = NULL
+        self.ctx.user.list_hook = NULL
+        if object_hook is not None:
+            if not PyCallable_Check(object_hook):
+                raise TypeError("object_hook must be a callable.")
+            self.ctx.user.object_hook = <PyObject*>object_hook
+        if list_hook is not None:
+            if not PyCallable_Check(list_hook):
+                raise TypeError("list_hook must be a callable.")
+            self.ctx.user.list_hook = <PyObject*>list_hook
+
+    cpdef unpack(self, object packed):
+        """unpack and return an object"""
+        cdef int ret = 0
+        cdef char* buf
+        cdef Py_ssize_t buf_len
+        cdef size_t off = 0
+
+        PyObject_AsReadBuffer(packed, <const_void_ptr*>&buf, &buf_len)
+        _gc_disable()
+        try:
+            ret = template_execute(&self.ctx, buf, buf_len, &off)
+        finally:
+            _gc_enable()
+        if ret == 1:
+            o = template_data(&self.ctx)
+            template_init(&self.ctx)
+            return o
+        else:
+            return None
